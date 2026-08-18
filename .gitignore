@@ -1,0 +1,58 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ===== PRIVATE / SENSITIVE - NEVER COMMIT =====
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.test.local
+
+# ===== Dependencies =====
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ===== Testing =====
+/coverage
+
+# ===== Next.js build output =====
+/.next/
+/out/
+
+# ===== Production build =====
+/build
+
+# ===== Misc =====
+.DS_Store
+*.pem
+Thumbs.db
+
+# ===== Debug logs =====
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ===== Vercel =====
+.vercel
+
+# ===== TypeScript =====
+*.tsbuildinfo
+next-env.d.ts
+
+# ===== Prisma generated (can be regenerated with `npx prisma generate`) =====
+# Note: schema.prisma IS committed, but generated client is not
+node_modules/.prisma
+
+# ===== OS files =====
+*.swp
+*.swo
+*~
