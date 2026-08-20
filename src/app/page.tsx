@@ -1,251 +1,127 @@
-'use client';
+import { getSession } from '@/lib/session';
+import { redirect } from 'next/navigation';
+import { prisma } from '@/lib/prisma';
+import AppShell from '@/components/AppShell';
 
-import React, { useState, useEffect } from 'react';
-import Sidebar, { NavTab } from '@/components/Sidebar';
-import Navbar from '@/components/Navbar';
-import DashboardView from '@/components/DashboardView';
-import PortfolioView from '@/components/PortfolioView';
-import AddTransactionView from '@/components/AddTransactionView';
-import TmsView from '@/components/TmsView';
-import TradeSimulationView from '@/components/TradeSimulationView';
-import WatchlistView from '@/components/WatchlistView';
-import RiskJournalView from '@/components/RiskJournalView';
-import HistoryView from '@/components/HistoryView';
-import WealthView from '@/components/WealthView';
-import AiAnalystView from '@/components/AiAnalystView';
-import ManageDataView from '@/components/ManageDataView';
-import ActivityLogView from '@/components/ActivityLogView';
+export const dynamic = 'force-dynamic';
 
-import {
-  PortfolioRecord,
-  CacheRecord,
-  TmsRecord,
-  WatchlistRecord,
-  JournalRecord,
-  WealthRecord,
-  AuditRecord
-} from '@/lib/storage';
+export default async function HomePage() {
+  const session = await getSession();
 
-export default function Home() {
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
-  const [role, setRole] = useState<'Admin' | 'View Only'>('Admin');
-  const [isSyncing, setIsSyncing] = useState(false);
+  if (!session) {
+    redirect('/login');
+  }
 
-  // State arrays
-  const [portfolio, setPortfolio] = useState<PortfolioRecord[]>([]);
-  const [cache, setCache] = useState<CacheRecord[]>([]);
-  const [tms, setTms] = useState<TmsRecord[]>([]);
-  const [watchlist, setWatchlist] = useState<WatchlistRecord[]>([]);
-  const [journal, setJournal] = useState<JournalRecord[]>([]);
-  const [wealth, setWealth] = useState<WealthRecord[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditRecord[]>([]);
+  // Fetch initial data directly on the server in parallel (fast, no client waterfalls)
+  const [
+    portfolioRows,
+    tmsRows,
+    watchlistRows,
+    journalRows,
+    wealthRows,
+    cacheRows,
+    auditRows,
+  ] = await Promise.all([
+    prisma.portfolio.findMany({ orderBy: { date: 'desc' } }).catch(() => []),
+    prisma.tmsTransaction.findMany({ orderBy: { date: 'desc' } }).catch(() => []),
+    prisma.watchlist.findMany({ orderBy: { symbol: 'asc' } }).catch(() => []),
+    prisma.tradingJournal.findMany({ orderBy: { dateTimeStamp: 'desc' } }).catch(() => []),
+    prisma.wealthSnapshot.findMany({ orderBy: { snapshotDate: 'asc' } }).catch(() => []),
+    prisma.marketCache.findMany({ orderBy: { symbol: 'asc' } }).catch(() => []),
+    prisma.auditLog.findMany({ orderBy: { timestamp: 'desc' }, take: 100 }).catch(() => []),
+  ]);
 
-  // Fetch initial data
-  const fetchData = async () => {
-    try {
-      const [portRes, cacheRes, tmsRes, wlRes, jRes, wRes, auditRes] = await Promise.all([
-        fetch('/api/portfolio').then((r) => r.json()),
-        fetch('/api/sync', { method: 'POST' }).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch('/api/tms').then((r) => r.json()),
-        fetch('/api/watchlist').then((r) => r.json()),
-        fetch('/api/journal').then((r) => r.json()),
-        fetch('/api/wealth').then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch('/api/audit').then((r) => r.json()).catch(() => ({ data: [] }))
-      ]);
+  const initialPortfolio = portfolioRows.map((r) => ({
+    id: r.id,
+    date: r.date ? r.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+    symbol: r.symbol,
+    qty: r.qty,
+    price: r.price,
+    transactionType: (r.transactionType || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+    remarks: r.remarks || undefined,
+    netAmount: r.netAmount || r.qty * r.price,
+    totalInvested: r.totalInvested || 0,
+    totalReceived: r.totalReceived || 0,
+    tmsCommission: r.tmsCommission || undefined,
+    cgt: r.cgt || undefined,
+    createdAt: r.createdAt ? r.createdAt.toISOString() : undefined,
+  }));
 
-      if (portRes.success) setPortfolio(portRes.data);
-      if (cacheRes.success && cacheRes.data) setCache(cacheRes.data);
-      if (tmsRes.success) setTms(tmsRes.data);
-      if (wlRes.success) setWatchlist(wlRes.data);
-      if (jRes.success) setJournal(jRes.data);
-      if (wRes.success) setWealth(wRes.data);
-      if (auditRes.success) setAuditLogs(auditRes.data);
-    } catch (e) {
-      console.error('Failed to load initial data:', e);
-    }
-  };
+  const initialTms = tmsRows.map((r) => ({
+    id: r.id,
+    date: r.date ? r.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+    stock: r.stock || undefined,
+    type: r.type,
+    medium: r.medium,
+    amount: r.amount,
+    charge: r.charge,
+    remark: r.remark || undefined,
+    status: r.status,
+    reference: r.reference || undefined,
+  }));
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const initialWatchlist = watchlistRows.map((r) => ({
+    id: r.id,
+    symbol: r.symbol,
+    targetPrice: r.targetPrice,
+    stopLoss: r.stopLoss,
+    hardTarget: r.hardTarget,
+    hardSl: r.hardSl,
+    entry1: r.entry1,
+    entryMust: r.entryMust,
+    notes: r.notes || undefined,
+  }));
 
-  const handleMarketSync = async () => {
-    setIsSyncing(true);
-    try {
-      const res = await fetch('/api/sync', { method: 'POST' });
-      const data = await res.json();
-      if (data.success && data.data) {
-        setCache(data.data);
-      }
-    } catch (e) {
-      console.error('Market sync error:', e);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+  const initialJournal = journalRows.map((r) => ({
+    id: r.id,
+    dateTimeStamp: r.dateTimeStamp ? r.dateTimeStamp.toISOString() : undefined,
+    symbol: r.symbol,
+    topic: r.topic,
+    feeling: r.feeling,
+    star: r.star,
+    tradeThesis: r.tradeThesis,
+    finalRemark: r.finalRemark || undefined,
+  }));
 
-  const handleAddPortfolioTransaction = async (record: any) => {
-    const res = await fetch('/api/portfolio', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(record)
-    });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    } else {
-      throw new Error(data.error);
-    }
-  };
+  const initialWealth = wealthRows.map((r) => ({
+    id: r.id,
+    snapshotDate: r.snapshotDate ? r.snapshotDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+    totalInvestment: r.totalInvestment,
+    currentValue: r.currentValue,
+  }));
 
-  const handleDeletePortfolioRecord = async (id: number) => {
-    const res = await fetch(`/api/portfolio?id=${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    }
-  };
+  const initialCache = cacheRows.map((r) => ({
+    id: r.id,
+    symbol: r.symbol,
+    ltp: r.ltp,
+    changePercent: r.changePercent,
+    volume: r.volume,
+    dayHigh: r.dayHigh,
+    dayLow: r.dayLow,
+    lastUpdated: r.lastUpdated ? r.lastUpdated.toISOString() : undefined,
+  }));
 
-  const handleAddTms = async (record: any) => {
-    const res = await fetch('/api/tms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(record)
-    });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    }
-  };
-
-  const handleDeleteTms = async (id: number) => {
-    const res = await fetch(`/api/tms?id=${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    }
-  };
-
-  const handleSaveWatchlist = async (item: any) => {
-    const res = await fetch('/api/watchlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(item)
-    });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    }
-  };
-
-  const handleDeleteWatchlist = async (symbol: string) => {
-    const res = await fetch(`/api/watchlist?symbol=${symbol}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    }
-  };
-
-  const handleAddJournal = async (entry: any) => {
-    const res = await fetch('/api/journal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(entry)
-    });
-    const data = await res.json();
-    if (data.success) {
-      await fetchData();
-    }
-  };
+  const initialAuditLogs = auditRows.map((r) => ({
+    id: r.id,
+    timestamp: r.timestamp ? r.timestamp.toISOString() : undefined,
+    action: r.action,
+    symbol: r.symbol || undefined,
+    details: r.details,
+  }));
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex font-sans antialiased selection:bg-emerald-500 selection:text-slate-950">
-      {/* Sidebar Navigation */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        role={role}
-        setRole={setRole}
-        onSync={handleMarketSync}
-        isSyncing={isSyncing}
-      />
-
-      {/* Main Workspace Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <Navbar role={role} />
-
-        <main className="flex-1 px-6 pt-6 overflow-y-auto">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              portfolio={portfolio}
-              cache={cache}
-              tms={tms}
-              watchlist={watchlist}
-              onNavigate={setActiveTab}
-            />
-          )}
-
-          {activeTab === 'portfolio' && (
-            <PortfolioView portfolio={portfolio} cache={cache} role={role} />
-          )}
-
-          {activeTab === 'add-transaction' && (
-            <AddTransactionView
-              portfolio={portfolio}
-              role={role}
-              onAddSuccess={handleAddPortfolioTransaction}
-            />
-          )}
-
-          {activeTab === 'tms' && (
-            <TmsView
-              tms={tms}
-              role={role}
-              onAddTms={handleAddTms}
-              onDeleteTms={handleDeleteTms}
-            />
-          )}
-
-          {activeTab === 'trade-sim' && <TradeSimulationView />}
-
-          {activeTab === 'watchlist' && (
-            <WatchlistView
-              watchlist={watchlist}
-              cache={cache}
-              role={role}
-              onSaveWatchlist={handleSaveWatchlist}
-              onDeleteWatchlist={handleDeleteWatchlist}
-            />
-          )}
-
-          {activeTab === 'risk-journal' && (
-            <RiskJournalView
-              journal={journal}
-              auditLogs={auditLogs}
-              role={role}
-              onAddJournal={handleAddJournal}
-            />
-          )}
-
-          {activeTab === 'history' && <HistoryView portfolio={portfolio} cache={cache} />}
-
-          {activeTab === 'wealth' && <WealthView wealth={wealth} />}
-
-          {activeTab === 'ai-analyst' && <AiAnalystView />}
-
-          {activeTab === 'manage-data' && (
-            <ManageDataView
-              role={role}
-              portfolio={portfolio}
-              tms={tms}
-              onDeletePortfolio={handleDeletePortfolioRecord}
-              onDeleteTms={handleDeleteTms}
-            />
-          )}
-
-          {activeTab === 'activity-log' && <ActivityLogView auditLogs={auditLogs} />}
-        </main>
-      </div>
-    </div>
+    <AppShell
+      initialPortfolio={initialPortfolio}
+      initialTms={initialTms}
+      initialWatchlist={initialWatchlist}
+      initialJournal={initialJournal}
+      initialWealth={initialWealth}
+      initialCache={initialCache}
+      initialAuditLogs={initialAuditLogs}
+      initialUser={{
+        username: session.username,
+        role: session.role,
+      }}
+    />
   );
 }

@@ -1,68 +1,96 @@
-import { NextResponse } from 'next/server';
-import { DataService } from '@/lib/storage';
-import { calculateFifoHoldings } from '@/lib/nepse-math';
+import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
+import { requireAuth, handleAuthError } from '@/lib/auth';
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { model, query } = await req.json();
+    await requireAuth();
+    const { model, prompt } = await request.json();
 
-    const portfolio = await DataService.getPortfolio();
-    const cache = await DataService.getMarketCache();
-    const activeHoldings = calculateFifoHoldings(portfolio);
-
-    let contextText = `NEPSE PORTFOLIO SUMMARY CONTEXT:\n`;
-    activeHoldings.forEach(h => {
-      const live = cache.find(c => c.symbol === h.symbol);
-      contextText += `- Symbol: ${h.symbol} | Units: ${h.netQty} | WACC: Rs ${h.wacc.toFixed(2)} | Cost: Rs ${h.totalCost.toFixed(2)} | LTP: Rs ${live ? live.ltp : 'N/A'}\n`;
-    });
-
-    const userPrompt = query || "Provide a quantitative analysis and tactical recommendation for my current NEPSE portfolio.";
-
-    // Provide intelligent, structured financial response tailored to the selected AI model
-    let responseText = '';
-
-    if (model === 'gemini') {
-      responseText = `### 🔵 Google Gemini 2.0 Flash Quantitative Analysis
-
-**Portfolio Health Evaluation:**
-Based on your current NEPSE holdings context:
-${activeHoldings.map(h => `- **${h.symbol}**: ${h.netQty} units @ WACC Rs ${h.wacc.toFixed(2)}`).join('\n')}
-
-**Key Insights & Strategic Guidance:**
-1. **Risk Concentration**: Maintain strict position sizing so no single stock exceeds 25% of overall equity.
-2. **Breakeven Targets**: Monitor your FIFO breakeven levels including broker commissions and 0.015% SEBON fees.
-3. **Actionable Plan**: ${userPrompt.includes('buy') ? 'Consider scaling in during market consolidation periods.' : 'Trail your stop losses upward as prices make higher highs.'}`;
-    } else if (model === 'chatgpt') {
-      responseText = `### 🟢 OpenAI GPT-4o Portfolio Review
-
-**Executive Summary:**
-Your active position portfolio is structured with ${activeHoldings.length} distinct assets in the Nepal Stock Exchange.
-
-**Quantitative Breakdown:**
-- **Capital Rotations**: Monitor realized profits vs open unrealized risk.
-- **Tax Planning**: Note that shares held > 365 days enjoy a reduced CGT rate of 5% vs 7.5% / 10% for short-term sales.
-
-**Tactical Recommendation:**
-Refine entry zones on Watchlist items and enforce 1:2 Risk/Reward ratios before initiating new buy orders.`;
-    } else {
-      responseText = `### ✖️ xAI Grok Quantitative Outlook
-
-**Market Signals & Sentiment:**
-- Active NEPSE positions analyzed with real-time FIFO WACC.
-- Watchlist Observers are tracking key entry levels.
-
-**Tactical Execution Rules:**
-- Never average down without verifying fundamental momentum.
-- Maintain liquid TMS collateral reserves to capitalize on sudden dips.`;
+    if (!prompt || typeof prompt !== 'string') {
+      return NextResponse.json({ success: false, error: 'Prompt is required.' }, { status: 400 });
     }
 
-    return NextResponse.json({
-      success: true,
-      model: model || 'gemini',
-      response: responseText,
-      context: contextText
-    });
-  } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    // Gather live context from database
+    const [trades, marketData, tms] = await Promise.all([
+      prisma.portfolio.findMany({ orderBy: { date: 'desc' }, take: 25 }),
+      prisma.marketCache.findMany({ orderBy: { volume: 'desc' }, take: 25 }),
+      prisma.tmsTransaction.findMany({ orderBy: { date: 'desc' }, take: 15 }),
+    ]);
+
+    const context = `You are an expert quantitative financial analyst for the Nepal Stock Exchange (NEPSE).
+Here is the user's live terminal context:
+
+PORTFOLIO RECENT TRADES (${trades.length}):
+${trades.map(t => `${t.transactionType} ${t.qty} ${t.symbol} @ Rs ${t.price} on ${t.date.toISOString().split('T')[0]}`).join('\n')}
+
+MARKET WATCH ACTIVE HIGHLIGHTS (${marketData.length}):
+${marketData.map(m => `${m.symbol}: LTP Rs ${m.ltp} (${m.changePercent > 0 ? '+' : ''}${m.changePercent.toFixed(2)}%) Vol: ${m.volume}`).join('\n')}
+
+TMS RECENT CASH FLOWS:
+${tms.map(t => `${t.type} via ${t.medium}: Rs ${t.amount} (${t.status})`).join('\n')}
+
+USER QUERY:
+${prompt}
+
+Please provide clear, actionable quantitative insight tailored specifically to NEPSE trading rules, WACC, and broker fees. Use Nepalese Rupees (Rs).`;
+
+    let aiResponse = '';
+
+    if (model === 'gemini') {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return NextResponse.json({
+          success: true,
+          response: '💡 Gemini API key not configured in .env. To enable Google Gemini 2.0 Flash analysis, add GEMINI_API_KEY to your .env file.\n\nLocal Quantitative Analysis: Based on your portfolio, ensure positions exceeding 25% allocation are monitored against strict stop-loss levels.'
+        });
+      }
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: context }] }] }),
+      });
+      const data = await res.json();
+      aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from Gemini.';
+    } else if (model === 'gpt') {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        return NextResponse.json({
+          success: true,
+          response: '💡 OpenAI API key not configured in .env. Add OPENAI_API_KEY to .env to use GPT-4o.'
+        });
+      }
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: context }], max_tokens: 2000 }),
+      });
+      const data = await res.json();
+      aiResponse = data.choices?.[0]?.message?.content || 'No response from GPT.';
+    } else if (model === 'grok') {
+      const apiKey = process.env.GROK_API_KEY;
+      if (!apiKey) {
+        return NextResponse.json({
+          success: true,
+          response: '💡 Grok API key not configured in .env. Add GROK_API_KEY to .env to use Grok.'
+        });
+      }
+      const res = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'grok-beta', messages: [{ role: 'user', content: context }], max_tokens: 2000 }),
+      });
+      const data = await res.json();
+      aiResponse = data.choices?.[0]?.message?.content || 'No response from Grok.';
+    } else {
+      aiResponse = 'Please select a valid AI model (Gemini, GPT-4o, or Grok).';
+    }
+
+    return NextResponse.json({ success: true, response: aiResponse });
+  } catch (error) {
+    const authErr = handleAuthError(error);
+    if (authErr) return authErr;
+    console.error('AI route error:', error);
+    return NextResponse.json({ success: false, error: 'AI processing failed' }, { status: 500 });
   }
 }

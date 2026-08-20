@@ -17,7 +17,6 @@ import {
   RefreshCw,
   Lock,
   UserCheck,
-  ShieldAlert,
   LogOut
 } from 'lucide-react';
 
@@ -42,6 +41,8 @@ interface SidebarProps {
   setRole: (role: 'Admin' | 'View Only') => void;
   onSync: () => void;
   isSyncing: boolean;
+  onLogout?: () => void;
+  username?: string;
 }
 
 export default function Sidebar({
@@ -50,7 +51,9 @@ export default function Sidebar({
   role,
   setRole,
   onSync,
-  isSyncing
+  isSyncing,
+  onLogout,
+  username
 }: SidebarProps) {
   const menuItems = [
     { id: 'dashboard' as NavTab, label: 'Dashboard Overview', icon: LayoutDashboard, category: 'Core' },
@@ -95,13 +98,16 @@ export default function Sidebar({
             ) : (
               <Lock className="w-4 h-4 text-amber-400" />
             )}
-            <span className="text-xs font-medium text-slate-300">
-              Role: <strong className={role === 'Admin' ? 'text-emerald-400' : 'text-amber-400'}>{role}</strong>
-            </span>
+            <div className="flex flex-col">
+              <span className="text-xs font-medium text-slate-300">
+                <strong className={role === 'Admin' ? 'text-emerald-400' : 'text-amber-400'}>{role}</strong>
+              </span>
+              {username && <span className="text-[10px] text-slate-500 font-mono">{username}</span>}
+            </div>
           </div>
           <button
             onClick={() => setRole(role === 'Admin' ? 'View Only' : 'Admin')}
-            className="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-750 text-slate-300 transition-colors border border-slate-700"
+            className="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-750 text-slate-300 transition-colors border border-slate-700 cursor-pointer"
             title="Toggle user permissions mode"
           >
             Switch
@@ -118,7 +124,7 @@ export default function Sidebar({
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all group ${
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all group cursor-pointer ${
                 isActive
                   ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-md shadow-emerald-500/5'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
@@ -136,14 +142,24 @@ export default function Sidebar({
         <button
           onClick={onSync}
           disabled={isSyncing}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-semibold text-xs transition-all shadow-md shadow-emerald-600/20"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
           {isSyncing ? 'Syncing Market...' : 'Sync Live Market'}
         </button>
 
+        {onLogout && (
+          <button
+            onClick={onLogout}
+            className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 font-medium text-xs transition-colors cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
+          </button>
+        )}
+
         <div className="pt-1 flex items-center justify-between text-[11px] text-slate-500 px-1">
-          <span>v2.5 Next.js App</span>
+          <span>v2.5 Next.js 16.3</span>
           <span className="flex items-center gap-1 text-emerald-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
             Neon Live

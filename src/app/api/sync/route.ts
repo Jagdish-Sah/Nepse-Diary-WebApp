@@ -1,80 +1,144 @@
 import { NextResponse } from 'next/server';
-import { DataService, CacheRecord } from '@/lib/storage';
+import { prisma } from '@/lib/prisma';
+import { requireAuth, handleAuthError } from '@/lib/auth';
+
+export async function GET() {
+  try {
+    await requireAuth();
+    const rows = await prisma.marketCache.findMany({
+      orderBy: { symbol: 'asc' },
+    });
+
+    const data = rows.map((r) => ({
+      id: r.id,
+      symbol: r.symbol,
+      ltp: r.ltp,
+      changePercent: r.changePercent,
+      volume: r.volume,
+      dayHigh: r.dayHigh,
+      dayLow: r.dayLow,
+      lastUpdated: r.lastUpdated ? r.lastUpdated.toISOString() : undefined,
+    }));
+
+    return NextResponse.json({ success: true, data });
+  } catch (error) {
+    const authErr = handleAuthError(error);
+    if (authErr) return authErr;
+    console.error('Market cache GET error:', error);
+    return NextResponse.json({ success: false, error: 'Failed to fetch market data' }, { status: 500 });
+  }
+}
 
 export async function POST() {
   try {
-    const portfolio = await DataService.getPortfolio();
-    const watchlist = await DataService.getWatchlist();
+    await requireAuth();
 
-    const symbolsSet = new Set<string>();
-    portfolio.forEach(p => symbolsSet.add(p.symbol.toUpperCase().trim()));
-    watchlist.forEach(w => symbolsSet.add(w.symbol.toUpperCase().trim()));
-    ['NABIL', 'GBIME', 'HDL', 'NHPC', 'SHIVM', 'CIT', 'NIFRA'].forEach(s => symbolsSet.add(s));
+    // Fetch live market data from Chukul API with 8s timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    const symbols = Array.from(symbolsSet);
-    const updatedRecords: Omit<CacheRecord, 'id'>[] = [];
-
-    let fetchedFromApi = false;
+    let stocks: any[] = [];
     try {
-      const res = await fetch('https://chukul.com/api/data/v2/live-market/', {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        next: { revalidate: 0 }
+      const response = await fetch('https://chukul.com/api/data/market', {
+        headers: { 'Accept': 'application/json', 'User-Agent': 'NepseTerminalPro/2.5' },
+        signal: controller.signal,
+        cache: 'no-store',
       });
+      clearTimeout(timeoutId);
 
-      if (res.ok) {
-        const liveData = await res.json();
-        if (Array.isArray(liveData) && liveData.length > 0) {
-          liveData.forEach((item: any) => {
-            if (item.symbol) {
-              const sym = item.symbol.toUpperCase().trim();
-              updatedRecords.push({
-                symbol: sym,
-                ltp: Number(item.ltp || item.lastTradedPrice || 0),
-                changePercent: Number(item.percentage_change || item.percentageChange || 0),
-                volume: Number(item.volume || 0),
-                dayHigh: Number(item.high || item.dayHigh || 0),
-                dayLow: Number(item.low || item.dayLow || 0)
-              });
-            }
-          });
-          if (updatedRecords.length > 0) fetchedFromApi = true;
+      if (response.ok) {
+        const rawData = await response.json();
+        stocks = Array.isArray(rawData) ? rawData : rawData.data || rawData.stocks || [];
+      }
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      console.warn('Live Chukul API fetch timed out or failed, using local cache:', fetchErr);
+    }
+
+    if (stocks.length > 0) {
+      // Prepare parsed valid stock records
+      const validRecords: {
+        symbol: string;
+        ltp: number;
+        changePercent: number;
+        volume: number;
+        dayHigh: number;
+        dayLow: number;
+      }[] = [];
+
+      for (const stock of stocks) {
+        const symbol = (stock.symbol || stock.s || '').toUpperCase().trim();
+        const ltp = parseFloat(stock.ltp || stock.c || stock.close || 0);
+        const changePercent = parseFloat(stock.change_percent || stock.pc || stock.pchange || 0);
+        const volume = parseInt(stock.volume || stock.v || stock.qty || 0, 10);
+        const dayHigh = parseFloat(stock.high || stock.h || stock.day_high || 0);
+        const dayLow = parseFloat(stock.low || stock.l || stock.day_low || 0);
+
+        if (symbol && ltp > 0) {
+          validRecords.push({ symbol, ltp, changePercent, volume, dayHigh, dayLow });
         }
       }
-    } catch (e) {
-      console.warn('External live market fetch failed, fallback jitter mode:', e);
-    }
 
-    if (!fetchedFromApi) {
-      const existingCache = await DataService.getMarketCache();
-      for (const sym of symbols) {
-        const prev = existingCache.find(c => c.symbol === sym);
-        const basePrice = prev ? prev.ltp : 300.0;
-        const changePct = (Math.random() * 4 - 1.8);
-        const newPrice = Math.max(10, Math.round((basePrice * (1 + changePct / 100)) * 10) / 10);
-
-        updatedRecords.push({
-          symbol: sym,
-          ltp: newPrice,
-          changePercent: Math.round(changePct * 100) / 100,
-          volume: Math.floor(Math.random() * 50000) + 10000,
-          dayHigh: Math.round(newPrice * 1.02 * 10) / 10,
-          dayLow: Math.round(newPrice * 0.98 * 10) / 10
-        });
+      // High-performance batch upsert in chunks of 50 concurrently
+      const CHUNK_SIZE = 50;
+      for (let i = 0; i < validRecords.length; i += CHUNK_SIZE) {
+        const chunk = validRecords.slice(i, i + CHUNK_SIZE);
+        await prisma.$transaction(
+          chunk.map((rec) =>
+            prisma.marketCache.upsert({
+              where: { symbol: rec.symbol },
+              update: {
+                ltp: rec.ltp,
+                changePercent: rec.changePercent,
+                volume: rec.volume,
+                dayHigh: rec.dayHigh,
+                dayLow: rec.dayLow,
+                lastUpdated: new Date(),
+              },
+              create: {
+                symbol: rec.symbol,
+                ltp: rec.ltp,
+                changePercent: rec.changePercent,
+                volume: rec.volume,
+                dayHigh: rec.dayHigh,
+                dayLow: rec.dayLow,
+                lastUpdated: new Date(),
+              },
+            })
+          )
+        );
       }
+
+      // Log sync audit
+      await prisma.auditLog.create({
+        data: {
+          action: 'MARKET_SYNC',
+          details: `Synced ${validRecords.length} live tickers from Chukul API`,
+        },
+      });
     }
 
-    await DataService.updateMarketCache(updatedRecords);
-    await DataService.addAuditLog('MARKET_SYNC', 'ALL', `Synchronized ${updatedRecords.length} stocks from Chukul live market API.`);
-
-    return NextResponse.json({
-      success: true,
-      count: updatedRecords.length,
-      timestamp: new Date().toISOString(),
-      data: updatedRecords
+    // Return the latest cache
+    const updatedRows = await prisma.marketCache.findMany({
+      orderBy: { symbol: 'asc' },
     });
-  } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+
+    const data = updatedRows.map((r) => ({
+      id: r.id,
+      symbol: r.symbol,
+      ltp: r.ltp,
+      changePercent: r.changePercent,
+      volume: r.volume,
+      dayHigh: r.dayHigh,
+      dayLow: r.dayLow,
+      lastUpdated: r.lastUpdated ? r.lastUpdated.toISOString() : undefined,
+    }));
+
+    return NextResponse.json({ success: true, data, count: data.length });
+  } catch (error) {
+    const authErr = handleAuthError(error);
+    if (authErr) return authErr;
+    console.error('Market sync error:', error);
+    return NextResponse.json({ success: false, error: 'Failed to sync market data' }, { status: 500 });
   }
 }
