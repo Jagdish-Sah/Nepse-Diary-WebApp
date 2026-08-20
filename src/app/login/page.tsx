@@ -2,18 +2,11 @@
 
 import React, { useActionState, useState } from 'react';
 import { loginAction } from '@/app/actions/auth';
-import { Shield, Lock, User, ArrowRight, Eye, EyeOff, Terminal, Activity, TrendingUp, Sparkles } from 'lucide-react';
+import { Shield, Lock, User, ArrowRight, Eye, EyeOff, Terminal, Activity, Sparkles } from 'lucide-react';
 
 export default function LoginPage() {
   const [state, formAction, isPending] = useActionState(loginAction, undefined);
   const [showPassword, setShowPassword] = useState(false);
-  const [usernameVal, setUsernameVal] = useState('');
-  const [passwordVal, setPasswordVal] = useState('');
-
-  const fillCredentials = (u: string, p: string) => {
-    setUsernameVal(u);
-    setPasswordVal(p);
-  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-4 sm:p-8 font-sans selection:bg-emerald-500 selection:text-slate-950 relative overflow-hidden">
@@ -69,9 +62,7 @@ export default function LoginPage() {
                   name="username"
                   type="text"
                   required
-                  placeholder="e.g. admin or viewer"
-                  value={usernameVal}
-                  onChange={(e) => setUsernameVal(e.target.value)}
+                  placeholder="Enter your username"
                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 outline-none transition-all font-mono"
                 />
               </div>
@@ -86,14 +77,12 @@ export default function LoginPage() {
                   type={showPassword ? 'text' : 'password'}
                   required
                   placeholder="••••••••••••"
-                  value={passwordVal}
-                  onChange={(e) => setPasswordVal(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-100 placeholder-slate-500 outline-none transition-all font-mono"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -118,29 +107,6 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
-          {/* Quick presets for testing */}
-          <div className="pt-4 border-t border-slate-800/80 space-y-2">
-            <div className="text-[11px] text-slate-500 text-center font-medium">Quick Credentials Fill:</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => fillCredentials('admin', 'password123')}
-                className="p-2 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-300 flex items-center justify-between transition-colors cursor-pointer"
-              >
-                <span className="font-semibold text-emerald-400">Admin</span>
-                <span className="text-slate-500 font-mono">admin / pass</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => fillCredentials('viewer', 'viewer123')}
-                className="p-2 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-300 flex items-center justify-between transition-colors cursor-pointer"
-              >
-                <span className="font-semibold text-amber-400">Viewer</span>
-                <span className="text-slate-500 font-mono">viewer / pass</span>
-              </button>
-            </div>
-          </div>
         </div>
       </main>
 
