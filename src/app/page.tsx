@@ -84,14 +84,12 @@ export default async function HomePage() {
   }));
 
   const initialWealth = wealthRows.map((r) => ({
-    id: r.id,
     snapshotDate: r.snapshotDate ? r.snapshotDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
     totalInvestment: r.totalInvestment,
     currentValue: r.currentValue,
   }));
 
   const initialCache = cacheRows.map((r) => ({
-    id: r.id,
     symbol: r.symbol,
     ltp: r.ltp,
     changePercent: r.changePercent,

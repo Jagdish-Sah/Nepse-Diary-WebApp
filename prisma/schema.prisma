@@ -42,8 +42,7 @@ model TmsTransaction {
 }
 
 model MarketCache {
-  id            Int      @id @default(autoincrement())
-  symbol        String   @unique
+  symbol        String   @id
   ltp           Float
   changePercent Float    @default(0) @map("change_percent")
   volume        Int      @default(0)
@@ -55,8 +54,7 @@ model MarketCache {
 }
 
 model WealthSnapshot {
-  id              Int      @id @default(autoincrement())
-  snapshotDate    DateTime @unique @map("snapshot_date")
+  snapshotDate    DateTime @id @map("snapshot_date")
   totalInvestment Float    @map("total_investment")
   currentValue    Float    @map("current_value")
 

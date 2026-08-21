@@ -89,6 +89,31 @@ export default function AppShell({
     }
   };
 
+  // Periodic background refresh every 1 hour & stale check on mount
+  React.useEffect(() => {
+    // Check if initial cache is missing or stale
+    const checkAndSync = async () => {
+      try {
+        const res = await fetch('/api/sync');
+        const json = await res.json();
+        if (json.success && json.data) {
+          setCache(json.data);
+        }
+      } catch (err) {
+        console.warn('Auto cache refresh check notice:', err);
+      }
+    };
+
+    checkAndSync();
+
+    // Auto-refresh interval every 1 hour (3600000 ms) to keep cache fresh
+    const interval = setInterval(() => {
+      checkAndSync();
+    }, 60 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   // Live market sync
   const handleMarketSync = async () => {
     setIsSyncing(true);

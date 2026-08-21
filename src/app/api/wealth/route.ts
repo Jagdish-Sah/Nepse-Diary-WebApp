@@ -10,7 +10,6 @@ export async function GET() {
     });
 
     const data = rows.map((r) => ({
-      id: r.id,
       snapshotDate: r.snapshotDate ? r.snapshotDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
       totalInvestment: r.totalInvestment,
       currentValue: r.currentValue,

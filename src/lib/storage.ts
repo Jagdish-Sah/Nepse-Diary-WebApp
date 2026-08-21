@@ -279,7 +279,6 @@ export const DataService = {
   async getMarketCache(): Promise<CacheRecord[]> {
     const rows = await prisma.marketCache.findMany({ orderBy: { symbol: 'asc' } });
     return rows.map(r => ({
-      id: r.id,
       symbol: r.symbol,
       ltp: r.ltp,
       changePercent: r.changePercent,
@@ -319,7 +318,6 @@ export const DataService = {
   async getWealth(): Promise<WealthRecord[]> {
     const rows = await prisma.wealthSnapshot.findMany({ orderBy: { snapshotDate: 'asc' } });
     return rows.map(r => ({
-      id: r.id,
       snapshotDate: r.snapshotDate ? r.snapshotDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
       totalInvestment: r.totalInvestment,
       currentValue: r.currentValue

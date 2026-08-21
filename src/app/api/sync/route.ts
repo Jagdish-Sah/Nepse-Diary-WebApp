@@ -1,16 +1,37 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAuth, handleAuthError } from '@/lib/auth';
+import {
+  getSymbolTtlMinutes,
+  isSymbolCacheExpired,
+  shouldRefreshCache,
+  syncMarketDataFromSource
+} from '@/lib/market-cache';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     await requireAuth();
-    const rows = await prisma.marketCache.findMany({
+
+    const { searchParams } = new URL(request.url);
+    const forceRefresh = searchParams.get('refresh') === 'true' || searchParams.get('force') === 'true';
+
+    let rows = await prisma.marketCache.findMany({
       orderBy: { symbol: 'asc' },
     });
 
+    // Check if cache needs auto-refresh (50/60/70m staggered expiry or 1-2 hours ceiling)
+    const needsRefresh = forceRefresh || shouldRefreshCache(rows);
+
+    if (needsRefresh) {
+      const syncResult = await syncMarketDataFromSource();
+      if (syncResult.success) {
+        rows = await prisma.marketCache.findMany({
+          orderBy: { symbol: 'asc' },
+        });
+      }
+    }
+
     const data = rows.map((r) => ({
-      id: r.id,
       symbol: r.symbol,
       ltp: r.ltp,
       changePercent: r.changePercent,
@@ -18,9 +39,16 @@ export async function GET() {
       dayHigh: r.dayHigh,
       dayLow: r.dayLow,
       lastUpdated: r.lastUpdated ? r.lastUpdated.toISOString() : undefined,
+      ttlMinutes: getSymbolTtlMinutes(r.symbol),
+      isExpired: isSymbolCacheExpired(r.symbol, r.lastUpdated),
     }));
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({
+      success: true,
+      data,
+      count: data.length,
+      autoRefreshed: needsRefresh
+    });
   } catch (error) {
     const authErr = handleAuthError(error);
     if (authErr) return authErr;
@@ -33,98 +61,13 @@ export async function POST() {
   try {
     await requireAuth();
 
-    // Fetch live market data from Chukul API with 8s timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    await syncMarketDataFromSource();
 
-    let stocks: any[] = [];
-    try {
-      const response = await fetch('https://chukul.com/api/data/market', {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'NepseTerminalPro/2.5' },
-        signal: controller.signal,
-        cache: 'no-store',
-      });
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        const rawData = await response.json();
-        stocks = Array.isArray(rawData) ? rawData : rawData.data || rawData.stocks || [];
-      }
-    } catch (fetchErr) {
-      clearTimeout(timeoutId);
-      console.warn('Live Chukul API fetch timed out or failed, using local cache:', fetchErr);
-    }
-
-    if (stocks.length > 0) {
-      // Prepare parsed valid stock records
-      const validRecords: {
-        symbol: string;
-        ltp: number;
-        changePercent: number;
-        volume: number;
-        dayHigh: number;
-        dayLow: number;
-      }[] = [];
-
-      for (const stock of stocks) {
-        const symbol = (stock.symbol || stock.s || '').toUpperCase().trim();
-        const ltp = parseFloat(stock.ltp || stock.c || stock.close || 0);
-        const changePercent = parseFloat(stock.change_percent || stock.pc || stock.pchange || 0);
-        const volume = parseInt(stock.volume || stock.v || stock.qty || 0, 10);
-        const dayHigh = parseFloat(stock.high || stock.h || stock.day_high || 0);
-        const dayLow = parseFloat(stock.low || stock.l || stock.day_low || 0);
-
-        if (symbol && ltp > 0) {
-          validRecords.push({ symbol, ltp, changePercent, volume, dayHigh, dayLow });
-        }
-      }
-
-      // High-performance batch upsert in chunks of 50 concurrently
-      const CHUNK_SIZE = 50;
-      for (let i = 0; i < validRecords.length; i += CHUNK_SIZE) {
-        const chunk = validRecords.slice(i, i + CHUNK_SIZE);
-        await prisma.$transaction(
-          chunk.map((rec) =>
-            prisma.marketCache.upsert({
-              where: { symbol: rec.symbol },
-              update: {
-                ltp: rec.ltp,
-                changePercent: rec.changePercent,
-                volume: rec.volume,
-                dayHigh: rec.dayHigh,
-                dayLow: rec.dayLow,
-                lastUpdated: new Date(),
-              },
-              create: {
-                symbol: rec.symbol,
-                ltp: rec.ltp,
-                changePercent: rec.changePercent,
-                volume: rec.volume,
-                dayHigh: rec.dayHigh,
-                dayLow: rec.dayLow,
-                lastUpdated: new Date(),
-              },
-            })
-          )
-        );
-      }
-
-      // Log sync audit
-      await prisma.auditLog.create({
-        data: {
-          action: 'MARKET_SYNC',
-          details: `Synced ${validRecords.length} live tickers from Chukul API`,
-        },
-      });
-    }
-
-    // Return the latest cache
     const updatedRows = await prisma.marketCache.findMany({
       orderBy: { symbol: 'asc' },
     });
 
     const data = updatedRows.map((r) => ({
-      id: r.id,
       symbol: r.symbol,
       ltp: r.ltp,
       changePercent: r.changePercent,
@@ -132,6 +75,8 @@ export async function POST() {
       dayHigh: r.dayHigh,
       dayLow: r.dayLow,
       lastUpdated: r.lastUpdated ? r.lastUpdated.toISOString() : undefined,
+      ttlMinutes: getSymbolTtlMinutes(r.symbol),
+      isExpired: false,
     }));
 
     return NextResponse.json({ success: true, data, count: data.length });
